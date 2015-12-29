@@ -22,7 +22,7 @@ module ANTPlus
         AcknowledgedDataPayload(..), OpenRxScanModePayload(..),
         ChannelResponsePayload(..), AdvancedBurstDataPayload(..),
         ChannelIdPayload(..), ChannelStatusPayload(..),
-        ANTVersionPayload(..), CapabilitiesPayload(..),
+        ANTVersionPayload(..), CapabilitiesPayload(..), DeviceSerialNumberPayload(..),
         encodeSerialMessage, sync, antMessage, NetworkNumber(..),
         ChannelNumber(..), ChannelType(..), DeviceNumber(..),
         NetworkKey(..), NetworkKey128(..), pattern Receive,
@@ -65,10 +65,10 @@ data AntMessage
   -- | AddChannelID{} -> 0x59
   -- | AddCryptoID{} -> 0x59
   -- | ConfigList{} -> 0x5A
-  -- | ConfigCryptoList{} -> 0x5A 
+  -- | ConfigCryptoList{} -> 0x5A
   | SetChannelTxPower SetChannelTxPowerPayload
   | SetLowPriorityChannelSearchTimeout SetLowPriorityChannelSearchTimeoutPayload
-  | SetSerialNumChannelId SetSerialNumChannelIdPayload 
+  | SetSerialNumChannelId SetSerialNumChannelIdPayload
   -- | RxExtMesgsEnable
   | EnableLED EnableLEDPayload
   | CrystalEnable CrystalEnablePayload
@@ -105,6 +105,7 @@ data AntMessage
   | ChannelId ChannelIdPayload
   | ANTVersion ANTVersionPayload
   | Capabilities CapabilitiesPayload
+  | DeviceSerialNumber DeviceSerialNumberPayload
 
 --------------------------------------------------------------------------------
 class IsAntMessage a where
@@ -506,6 +507,7 @@ data ChannelIdPayload =
 --------------------------------------------------------------------------------
 data ANTVersionPayload =
   ANTVersionPayload {antVersionVersion :: !Text}
+  deriving (Eq, Generic, Serial)
 
 --------------------------------------------------------------------------------
 data CapabilitiesPayload =
@@ -542,6 +544,7 @@ data CapabilitiesPayload =
 --------------------------------------------------------------------------------
 data DeviceSerialNumberPayload =
   DeviceSerialNumberPayload {deviceSerialNumberSerialNumber :: !(Word8,Word8,Word8,Word8)}
+  deriving (Eq, Generic, Serial)
 
 --------------------------------------------------------------------------------
 sync :: Sync
@@ -584,6 +587,7 @@ antEncodeMessage =
     -- BurstData payload -> infer payload
     -- AcknowledgedData payload -> infer payload
     -- AdvancedBurstData payload -> infer payload
+    DeviceSerialNumber payload -> infer payload
   where infer :: Serial a
               => a -> Build.Builder
         infer = Build.lazyByteString . runPutL . serialize
@@ -643,6 +647,7 @@ antMessageId =
         ChannelId{} -> 0x51
         ANTVersion{} -> 0x3E
         Capabilities{} -> 0x54
+        DeviceSerialNumber{} -> 0x61
 
 --------------------------------------------------------------------------------
 encodeSerialMessage

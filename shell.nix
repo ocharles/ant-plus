@@ -5,7 +5,7 @@ let
   inherit (nixpkgs) pkgs;
 
   f = { mkDerivation, base, bytes, bytestring, digest, stdenv
-      , tagged, text, usb, vector
+      , tagged, text, usb, vector, managed
       }:
       mkDerivation {
         pname = "ant-plus";
@@ -16,7 +16,7 @@ let
         libraryHaskellDepends = [
           base bytes bytestring digest tagged text usb vector
         ];
-        executableHaskellDepends = [ base bytestring usb vector ];
+        executableHaskellDepends = [ base bytestring usb vector managed ];
         homepage = "https://github.com/ocharles/ant-plus";
         description = "Haskell bindings to ANT+ devices";
         license = stdenv.lib.licenses.bsd3;
