@@ -55,7 +55,7 @@ main =
                       send (antMessage
                               (SetNetworkKeyPayload
                                  (NetworkNumber 0)
-                                 (185,165,33,251,189,114,195,69)))
+                                 (NetworkKey 185 165 33 251 189 114 195 69)))
                       read
                       -- Assign channel
                       putStrLn "Opening HRM channel"

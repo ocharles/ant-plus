@@ -1,6 +1,9 @@
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TypeOperators #-}
 
 module ANTPlus
        (AntMessage(..), UnAssignChannelPayload(..),
@@ -10,25 +13,43 @@ module ANTPlus
         SetLowPriorityChannelSearchTimeoutPayload(..),
         SetNetworkKeyPayload(..), SetSearchWaveformPayload(..),
         SetTransmitPowerPayload(..), SetSerialNumChannelIdPayload(..),
-        OpenChannelPayload(..), SerialMessage(..), encodeSerialMessage,
-        sync, antMessage, NetworkNumber(..), ChannelNumber(..),
-        ChannelType(..), DeviceNumber(..))
+        OpenChannelPayload(..), EnableLEDPayload(..), LibConfigPayload(..),
+        ConfigFrequencyAgilityPayload(..), CrystalEnablePayload(..),
+        SetProximitySearchPayload(..), SerialMessage(..),
+        Set128BitNetworkKeyPayload(..), StartUpMessagePayload(..),
+        CloseChannelPayload(..), SetChannelSearchPriorityPayload(..),
+        BroadcastDataPayload(..), BurstDataPayload(..),
+        AcknowledgedDataPayload(..), OpenRxScanModePayload(..),
+        ChannelResponsePayload(..), AdvancedBurstDataPayload(..),
+        ChannelIdPayload(..), ChannelStatusPayload(..),
+        ANTVersionPayload(..), CapabilitiesPayload(..),
+        encodeSerialMessage, sync, antMessage, NetworkNumber(..),
+        ChannelNumber(..), ChannelType(..), DeviceNumber(..),
+        NetworkKey(..), NetworkKey128(..), pattern Receive,
+        pattern Transmit, pattern TransmitOnly, pattern ReceiveOnly,
+        pattern SharedReceive, pattern SharedTransmit, pattern PowerLevel0,
+        pattern PowerLevel1, pattern PowerLevel2, pattern PowerLevel3,
+        pattern PowerLevel4, pattern StandardSearchWaveform,
+        pattern FastSearchWaveform, pattern Threshold1, pattern Threshold2,
+        pattern Threshold3, pattern Threshold4, pattern Threshold5,
+        pattern Threshold6, pattern Threshold7, pattern Threshold8,
+        pattern Threshold9, pattern Threshold10, SequenceNumber(..),
+        ChannelState(..), DeviceTypeId(..), TransmissionType(..))
        where
 
-import Control.Monad
-import Data.Bits (xor, clearBit, setBit)
+import Control.Applicative
+import Data.Bits (xor, bit, clearBit, setBit, testBit, (.|.), (.&.))
 import Data.Bool
-import Data.Digest.CRC32
 import Data.Foldable
 import Data.Monoid ((<>))
-import Data.Tagged
+import Data.Bytes.Get
+import Data.Bytes.Put
+import Data.Bytes.Serial
 import Data.Text (Text)
 import Data.Word (Word8, Word16)
-import System.USB
-import qualified Data.ByteString as BS
+import GHC.Generics
 import qualified Data.ByteString.Builder as Build
 import qualified Data.ByteString.Lazy as LBS
-import qualified Data.Vector as V
 
 --------------------------------------------------------------------------------
 data AntMessage
@@ -36,6 +57,7 @@ data AntMessage
   | AssignChannel AssignChannelPayload
   | SetChannelId SetChannelIdPayload
   | SetChannelPeriod SetChannelPeriodPayload
+  | SetChannelSearchTimeout SetChannelSearchTimeoutPayload
   | SetChannelRFFreq SetChannelRFFreqPayload
   | SetNetworkKey SetNetworkKeyPayload
   | SetTransmitPower SetTransmitPowerPayload
@@ -47,15 +69,15 @@ data AntMessage
   | SetChannelTxPower SetChannelTxPowerPayload
   | SetLowPriorityChannelSearchTimeout SetLowPriorityChannelSearchTimeoutPayload
   | SetSerialNumChannelId SetSerialNumChannelIdPayload 
-  -- | RxExtMesgsEnable{} -> 0x66
-  -- | EnableLED{} -> 0x68
-  -- | CrystalEnable{} -> 0x6D
-  -- | LibConfig{} -> 0x6E
-  -- | ConfigFrequencyAgility{} -> 0x70
-  -- | SetProximitySearch{} -> 0x71
+  -- | RxExtMesgsEnable
+  | EnableLED EnableLEDPayload
+  | CrystalEnable CrystalEnablePayload
+  | LibConfig LibConfigPayload
+  | ConfigFrequencyAgility ConfigFrequencyAgilityPayload
+  | SetProximitySearch SetProximitySearchPayload
   -- | ConfigEventBuffer{} -> 0x74
-  | SetChannelSearchTimeout SetChannelSearchTimeoutPayload
-  -- | Set128BitNetworkKey{} -> 0x76
+  | SetChannelSearchPriority SetChannelSearchPriorityPayload
+  | Set128BitNetworkKey Set128BitNetworkKeyPayload
   -- | ConfigHighDutySearch{} -> 0x77
   -- | ConfigAdvancedBurst{} -> 0x78
   -- | ConfigEventFilter{} -> 0x79
@@ -68,10 +90,21 @@ data AntMessage
   -- | SetSearchSharingCycles{} -> 0x81
   -- | CryptoKeyNVMOp{} -> 0x83
   -- | SetUSBDescriptorString{} -> 0xC7
-  -- | StartUpMessage{} -> 0x6F
+  | StartUpMessage StartUpMessagePayload
   -- | SerialErrorMessage{} -> 0xAE
   | ResetSystem
   | OpenChannel OpenChannelPayload
+  | CloseChannel CloseChannelPayload
+  | OpenRxScanMode OpenRxScanModePayload
+  | BroadcastData BroadcastDataPayload
+  | BurstData BurstDataPayload
+  | AdvancedBurstData AdvancedBurstDataPayload
+  | AcknowledgedData AcknowledgedDataPayload
+  | ChannelResponse ChannelResponsePayload
+  | ChannelStatus ChannelStatusPayload
+  | ChannelId ChannelIdPayload
+  | ANTVersion ANTVersionPayload
+  | Capabilities CapabilitiesPayload
 
 --------------------------------------------------------------------------------
 class IsAntMessage a where
@@ -79,13 +112,16 @@ class IsAntMessage a where
 
 --------------------------------------------------------------------------------
 data UnAssignChannelPayload =
-  UnAssignChannelPayload {unassignChannelNumber :: !Word8}
+  UnAssignChannelPayload {unassignChannelNumber :: !ChannelNumber}
+  deriving (Eq, Generic, Serial, Show)
 
 instance IsAntMessage UnAssignChannelPayload where
   antMessage = UnAssignChannel
 
 --------------------------------------------------------------------------------
-newtype ChannelType = ChannelType Word8
+newtype ChannelType =
+  ChannelType Word8
+  deriving (Eq,Generic,Serial,Show)
 
 pattern Receive = ChannelType 0x00
 pattern Transmit = ChannelType 0x10
@@ -95,16 +131,21 @@ pattern SharedReceive = ChannelType 0x20
 pattern SharedTransmit = ChannelType 0x30
 
 --------------------------------------------------------------------------------
-newtype ChannelNumber = ChannelNumber Word8
+newtype ChannelNumber =
+  ChannelNumber Word8
+  deriving (Eq,Generic,Serial,Show)
 
 --------------------------------------------------------------------------------
-newtype NetworkNumber = NetworkNumber Word8
+newtype NetworkNumber =
+  NetworkNumber Word8
+  deriving (Eq,Generic,Serial,Show)
 
 --------------------------------------------------------------------------------
 data AssignChannelPayload =
   AssignChannelPayload {assignChannelChannelNumber :: !ChannelNumber
                        ,assignChannelType :: !ChannelType
                        ,assignChannelNetworkNumber :: !NetworkNumber}
+  deriving (Eq,Generic,Serial)
 
 instance IsAntMessage AssignChannelPayload where
   antMessage = AssignChannel
@@ -117,6 +158,25 @@ data SetChannelIdPayload =
                       ,setChannelIdDeviceType :: !Word8
                       ,setChannelIdTransmissionType :: !Word8}
 
+instance Serial SetChannelIdPayload where
+  serialize SetChannelIdPayload{..} =
+    do serialize setChannelIdChannelNumber
+       serialize setChannelIdDeviceNumber
+       putWord8 (bool (clearBit setChannelIdDeviceType 0)
+                      (setBit setChannelIdDeviceType 0)
+                      setChannelIdDevicePairing)
+       putWord8 setChannelIdTransmissionType
+  deserialize =
+    do cn <- deserialize
+       dn <- deserialize
+       dt <- deserialize
+       tt <- deserialize
+       pure (SetChannelIdPayload cn
+                                 dn
+                                 (testBit dt 0)
+                                 dt
+                                 tt)
+
 instance IsAntMessage SetChannelIdPayload where
   antMessage = SetChannelId
 
@@ -128,10 +188,17 @@ data SetChannelPeriodPayload =
 instance IsAntMessage SetChannelPeriodPayload where
   antMessage = SetChannelPeriod
 
+instance Serial SetChannelPeriodPayload where
+  serialize SetChannelPeriodPayload{..} =
+    do serialize setChannelPeriodChannelNumber
+       putWord16le setChannelPeriodMessagingPeriod
+  deserialize = liftA2 SetChannelPeriodPayload deserialize getWord16le
+
 --------------------------------------------------------------------------------
 data SetChannelSearchTimeoutPayload =
   SetChannelSearchTimeoutPayload {setChannelSearchTimeoutChannelNumber :: !ChannelNumber
                                  ,setChannelSearchTimeoutSearchTimeout :: !Word8}
+  deriving (Eq, Show, Generic, Serial)
 
 instance IsAntMessage SetChannelSearchTimeoutPayload where
   antMessage = SetChannelSearchTimeout
@@ -140,6 +207,7 @@ instance IsAntMessage SetChannelSearchTimeoutPayload where
 data SetChannelRFFreqPayload =
   SetChannelRFFreqPayload {setChannelRFFreqChannelNumber :: !ChannelNumber
                           ,setChannelRFFreqRFFrequency :: !Word8}
+  deriving (Eq, Show, Generic, Serial)
 
 instance IsAntMessage SetChannelRFFreqPayload where
   antMessage = SetChannelRFFreq
@@ -147,13 +215,27 @@ instance IsAntMessage SetChannelRFFreqPayload where
 --------------------------------------------------------------------------------
 data SetNetworkKeyPayload =
   SetNetworkKeyPayload {setNetworkKeyNetworkNumber :: !NetworkNumber
-                       ,setNetworkKeyNetworkKey :: !(Word8,Word8,Word8,Word8,Word8,Word8,Word8,Word8)}
+                       ,setNetworkKeyNetworkKey :: !NetworkKey}
+  deriving (Eq,Show,Generic,Serial)
 
 instance IsAntMessage SetNetworkKeyPayload where
   antMessage = SetNetworkKey
 
 --------------------------------------------------------------------------------
+data NetworkKey =
+  NetworkKey !Word8
+             !Word8
+             !Word8
+             !Word8
+             !Word8
+             !Word8
+             !Word8
+             !Word8
+  deriving (Eq,Show,Generic,Serial)
+
+--------------------------------------------------------------------------------
 newtype PowerLevel = PowerLevel Word8
+  deriving (Eq, Show, Generic, Serial)
 
 pattern PowerLevel0 = PowerLevel 0
 pattern PowerLevel1 = PowerLevel 1
@@ -161,53 +243,100 @@ pattern PowerLevel2 = PowerLevel 2
 pattern PowerLevel3 = PowerLevel 3
 pattern PowerLevel4 = PowerLevel 4
 
+--------------------------------------------------------------------------------
 data SetTransmitPowerPayload =
   SetTransmitPowerPayload {setTransmitPowerTransmitPower :: PowerLevel}
+  deriving (Eq, Show, Generic, Serial)
 
+--------------------------------------------------------------------------------
 newtype SearchWaveform = SearchWaveform Word8
+  deriving (Eq, Show, Generic, Serial)
 
 pattern StandardSearchWaveform = SearchWaveform 0
 pattern FastSearchWaveform = SearchWaveform 1
 
+--------------------------------------------------------------------------------
 data SetSearchWaveformPayload =
-  SetSearchWaveformPayload {setSearchWaveformChannelNumber :: !Word8
+  SetSearchWaveformPayload {setSearchWaveformChannelNumber :: !ChannelNumber
                            ,setSearchWaveformSearchWaveform :: !SearchWaveform}
+  deriving (Eq, Show, Generic, Serial)
 
+--------------------------------------------------------------------------------
 data SetChannelTxPowerPayload =
-  SetChannelTxPowerPayload {setChannelTxPowerChannelNumber :: !Word8
+  SetChannelTxPowerPayload {setChannelTxPowerChannelNumber :: !ChannelNumber
                            ,setChannelTxPowerTransmitPower :: !PowerLevel}
+  deriving (Eq, Show, Generic, Serial)
 
+--------------------------------------------------------------------------------
 data SetLowPriorityChannelSearchTimeoutPayload =
-  SetLowPriorityChannelSearchTimeoutPayload {setLowPriorityChannelSearchTimeoutChannelNumber :: !Word8
+  SetLowPriorityChannelSearchTimeoutPayload {setLowPriorityChannelSearchTimeoutChannelNumber :: !ChannelNumber
                                             ,setLowPriorityChannelSearchTimeoutSearchTimeout :: !Word8}
+  deriving (Eq,Show,Generic,Serial)
 
+--------------------------------------------------------------------------------
 data SetSerialNumChannelIdPayload =
   SetSerialNumChannelIdPayload {setSerialNumChannelIdChannelNumber :: !Word8
                                ,setSerialNumChannelIdPairingRequest :: !Bool
                                ,setSerialNumChannelIdDeviceTypeId :: !Word8
                                ,setSerialNumChannelIdTransmissionType :: !Word8}
 
+instance Serial SetSerialNumChannelIdPayload where
+  serialize SetSerialNumChannelIdPayload{..} =
+    do serialize setSerialNumChannelIdChannelNumber
+       putWord8 (bool (clearBit setSerialNumChannelIdDeviceTypeId 0)
+                      (setBit setSerialNumChannelIdDeviceTypeId 0)
+                      setSerialNumChannelIdPairingRequest)
+       putWord8 setSerialNumChannelIdTransmissionType
+  deserialize =
+    do cn <- deserialize
+       dt <- deserialize
+       tt <- deserialize
+       pure (SetSerialNumChannelIdPayload cn
+                                          (testBit dt 0)
+                                          dt
+                                          tt)
+
+--------------------------------------------------------------------------------
 data EnableExtendedMessagesPayload =
   EnableExtendedMessagesPayload {enableExtendedMessagesEnable :: !Bool}
+  deriving (Eq,Show,Generic,Serial)
 
-data EnableLedPayload =
-  EnableLedPayload {enableLedEnable :: !Bool}
+--------------------------------------------------------------------------------
+data EnableLEDPayload =
+  EnableLEDPayload {enableLEDEnable :: !Bool}
+  deriving (Eq,Show,Generic,Serial)
 
-data EnableCrystalPayload =
-  EnableCrystalPayload {enableCrystalEnable :: !Bool}
+--------------------------------------------------------------------------------
+data CrystalEnablePayload =
+  CrystalEnablePayload {crystalEnableEnable :: !Bool}
+  deriving (Eq,Show,Generic,Serial)
 
-data EnableLibConfigPayload =
-  EnableLibConfigPayload {enableLibConfigEnableRxTimestamp :: !Bool
-                         ,enableLibConfigEnableRSSI :: !Bool
-                         ,enableLibConfigEnableChannelId :: !Bool}
+--------------------------------------------------------------------------------
+data LibConfigPayload =
+  LibConfigPayload {libConfigEnableRxTimestamp :: !Bool
+                   ,libConfigEnableRSSI :: !Bool
+                   ,libConfigEnableChannelId :: !Bool}
 
+instance Serial LibConfigPayload where
+  serialize (LibConfigPayload a b c) =
+    putWord8 (0 .|. bool 0 32 a .|. bool 0 64 b .|. bool 0 128 c)
+  deserialize =
+    do byte <- getWord8
+       pure (LibConfigPayload (byte .&. 32 == 32)
+                              (byte .&. 64 == 64)
+                              (byte .&. 128 == 128))
+
+--------------------------------------------------------------------------------
 data ConfigFrequencyAgilityPayload =
-  ConfigFrequencyAgilityPayload {configFrequencyAgilityChannelNumber :: !Word8
+  ConfigFrequencyAgilityPayload {configFrequencyAgilityChannelNumber :: !ChannelNumber
                                 ,configFrequencyAgilityUcFrequency1 :: !Word8
                                 ,configFrequencyAgilityUcFrequency2 :: !Word8
                                 ,configFrequencyAgilityUcFrequency3 :: !Word8}
+  deriving (Eq,Show,Generic,Serial)
 
+--------------------------------------------------------------------------------
 newtype SearchThreshold = SearchThreshold Word8
+  deriving (Eq,Show,Generic,Serial)
 
 pattern Threshold1 = SearchThreshold 1
 pattern Threshold2 = SearchThreshold 2
@@ -220,37 +349,52 @@ pattern Threshold8 = SearchThreshold 8
 pattern Threshold9 = SearchThreshold 9
 pattern Threshold10 = SearchThreshold 10
 
+--------------------------------------------------------------------------------
 data SetProximitySearchPayload =
   SetProximitySearchPayload {setProximitySearchPayloadChannelNumber :: !Word8
                             ,setProximitySearchPayloadUcSearchThreshold :: !(Maybe SearchThreshold)}
+  deriving (Eq,Show,Generic,Serial)
 
+--------------------------------------------------------------------------------
 data SetChannelSearchPriorityPayload =
   SetChannelSearchPriorityPayload {setChannelSearchPriorityChannelNumber :: !Word8
                                   ,setChannelSearchPrioritySearchPriority :: !Word8}
+  deriving (Eq,Show,Generic,Serial)
 
-
+--------------------------------------------------------------------------------
 data Set128BitNetworkKeyPayload =
   Set128BitNetworkKeyPayload {set128BitNetworkKeyNetworkNumber :: !Word8
-                             ,set128BitNetworkKeyNetworkKey :: !(Word8,Word8,Word8,Word8,Word8,Word8,Word8,Word8,Word8,Word8,Word8,Word8,Word8,Word8,Word8,Word8)}
+                             ,set128BitNetworkKeyNetworkKey :: !NetworkKey128}
+  deriving (Eq,Generic,Serial)
 
+data NetworkKey128 =
+  NetworkKey128 !Word8
+                !Word8
+                !Word8
+                !Word8
+                !Word8
+                !Word8
+                !Word8
+                !Word8
+                !Word8
+                !Word8
+                !Word8
+                !Word8
+                !Word8
+                !Word8
+                !Word8
+                !Word8
+  deriving (Eq,Generic,Serial)
+
+--------------------------------------------------------------------------------
 newtype Sync = Sync Word8
+  deriving (Eq,Show,Generic,Serial)
 
+--------------------------------------------------------------------------------
 newtype MessageId = MessageId Word8
+  deriving (Eq,Show,Generic,Serial)
 
--- instance AntMessage ResetSystem where
---   antMessageId = Tagged 0x4a
---   antEncodeMessage _ = BS.pack [0]
-
-type NetworkKey = BS.ByteString
-
--- data SetNetworkKey =
---   SetNetworkKey {snkNetworkNumber :: !NetworkNumber
---                 ,snkNetworkKey :: !NetworkKey}
-
--- instance AntMessage SetNetworkKey where
---   antMessageId = Tagged 70
---   antEncodeMessage (SetNetworkKey (NetworkNumber nn) key) = BS.singleton nn <> key
-
+--------------------------------------------------------------------------------
 data StartUpMessagePayload =
   StartUpMessagePayload {startUpMessagePowerOnReset :: !Bool
                         ,startUpMessageHardwareResetLine :: !Bool
@@ -259,9 +403,27 @@ data StartUpMessagePayload =
                         ,startUpMessageSynchronousReset :: !Bool
                         ,startUpMessageSuspendReset :: !Bool}
 
+instance Serial StartUpMessagePayload where
+  serialize (StartUpMessagePayload a b c d e f) =
+    putWord8 (if a
+                 then 0
+                 else foldl' (.|.)
+                             0
+                             (map (\(on,n) -> bool 0 (bit n) on)
+                                  [(b,0),(c,1),(d,5),(e,6),(f,7)]))
+  deserialize =
+    do byte <- getWord8
+       pure (StartUpMessagePayload (byte == 0)
+                                   (testBit byte 0)
+                                   (testBit byte 1)
+                                   (testBit byte 5)
+                                   (testBit byte 6)
+                                   (testBit byte 7))
+
 --------------------------------------------------------------------------------
 data OpenChannelPayload =
   OpenChannelPayload {openChannelChannelNumber :: !ChannelNumber}
+  deriving (Eq,Show,Generic,Serial)
 
 instance IsAntMessage OpenChannelPayload where
   antMessage = OpenChannel
@@ -269,63 +431,83 @@ instance IsAntMessage OpenChannelPayload where
 --------------------------------------------------------------------------------
 data CloseChannelPayload =
   CloseChannelPayload {closeChannelChannelNumber :: !ChannelNumber}
+  deriving (Eq,Show,Generic,Serial)
 
 data OpenRxScanModePayload =
   OpenRxScanModePayload {openRxScanModeAllowSynchronousPacketsOnly :: !Bool}
+  deriving (Eq,Show,Generic,Serial)
 
--- data OpenChannel =
---   OpenChannel {ocChannelNumber :: Word8}
+--------------------------------------------------------------------------------
+data BroadcastDataPayload =
+  BroadcastDataPayload {broadcastDataChannelNumber :: !ChannelNumber}
+                       --,broadcastDataData :: !BS.ByteString}
 
-data BroadcastDataPayload a =
-  BroadcastDataPayload {broadcastDataChannelNumber :: !ChannelNumber
-                       ,broadcastDataData :: a}
+--------------------------------------------------------------------------------
+data AcknowledgedDataPayload =
+  AcknowledgedDataPayload {acknowledgedDataChannelNumber :: !ChannelNumber}
+                          -- ,acknowledgedDataData :: a}
 
-data AcknowledgedDataPayload a =
-  AcknowledgedDataPayload {acknowledgedDataChannelNumber :: !ChannelNumber
-                          ,acknowledgedDataData :: a}
-
+--------------------------------------------------------------------------------
 newtype SequenceNumber = SequenceNumber Word8
 
-data BurstDataPayload a =
+--------------------------------------------------------------------------------
+data BurstDataPayload =
   BurstDataPayload {burstDataSequenceNumber :: !SequenceNumber
-                   ,burstDataChannelNumber :: !ChannelNumber
-                   ,burstDataData :: a}
+                   ,burstDataChannelNumber :: !ChannelNumber}
+                   -- ,burstDataData :: a}
 
-data AdvancedBurstDataPayload a =
+--------------------------------------------------------------------------------
+data AdvancedBurstDataPayload =
   AdvancedBurstDataPayload {advancedBurstDataSequenceNumber :: !SequenceNumber
-                           ,advancedBurstDataChannelNumber :: !ChannelNumber
-                           ,advancedBurstDataData :: a}
+                           ,advancedBurstDataChannelNumber :: !ChannelNumber}
+                           -- ,advancedBurstDataData :: a}
 
+--------------------------------------------------------------------------------
 newtype MessageCode = MessageCode Word8
+  deriving (Eq,Show,Generic,Serial)
 
+--------------------------------------------------------------------------------
 data ChannelResponsePayload =
   ChannelResponsePayload {channelResponseChannelNumber :: !ChannelNumber
                          ,channelResponseMessageId :: !MessageId
                          ,channelResponseMessageCode :: !MessageCode}
+  deriving (Eq,Show,Generic,Serial)
 
+--------------------------------------------------------------------------------
 newtype ChannelState = ChannelState Word8
 
+--------------------------------------------------------------------------------
 data ChannelStatusPayload =
   ChannelStatusPayload {channelStatusChannelNumber :: !ChannelNumber
                        ,channelStatusChannelType :: !ChannelType
                        ,channelStatusNetworkNumber :: !NetworkNumber
                        ,channelStatusChannelState :: !ChannelState}
 
+--------------------------------------------------------------------------------
 newtype DeviceNumber = DeviceNumber Word16
 
+instance Serial DeviceNumber where
+  serialize (DeviceNumber w16) = putWord16le w16
+  deserialize = fmap DeviceNumber getWord16le
+
+--------------------------------------------------------------------------------
 newtype DeviceTypeId = DeviceTypeId Word8
 
+--------------------------------------------------------------------------------
 newtype TransmissionType = TransmissionType Word8
 
+--------------------------------------------------------------------------------
 data ChannelIdPayload =
   ChannelIdPayload {channelIdChannelNumber :: !ChannelNumber
                    ,channelIdDeviceNumber :: !DeviceNumber
                    ,channelIdDeviceTypeId :: !DeviceTypeId
                    ,channelIdTransmissionType :: !TransmissionType}
 
+--------------------------------------------------------------------------------
 data ANTVersionPayload =
   ANTVersionPayload {antVersionVersion :: !Text}
 
+--------------------------------------------------------------------------------
 data CapabilitiesPayload =
   CApabilitiesPayload {capabilitiesMaxANTChannels :: !Word8
                       ,capabilitiesMaxNetworks :: !Word8
@@ -357,65 +539,56 @@ data CapabilitiesPayload =
                       ,capabilitiesEncryptedChannelEnabled :: !Bool
                       ,capabilitiesRFActiveNotificationEnabled :: !Bool}
 
+--------------------------------------------------------------------------------
 data DeviceSerialNumberPayload =
   DeviceSerialNumberPayload {deviceSerialNumberSerialNumber :: !(Word8,Word8,Word8,Word8)}
 
--- instance AntMessage OpenChannel where
---   antMessageId = Tagged 0x4B
---   antEncodeMessage (OpenChannel cn) = BS.pack [cn] 
-
--- class AntMessage a where
---   antMessageId :: Tagged a Word8
---   antEncodeMessage :: a -> BS.ByteString
-
+--------------------------------------------------------------------------------
 sync :: Sync
 sync = Sync 164
 
+--------------------------------------------------------------------------------
 data SerialMessage =
   SerialMessage {smSync :: !Sync
                 ,smMessage:: !AntMessage}
 
-buildChannelNumber :: ChannelNumber -> Build.Builder
-buildChannelNumber (ChannelNumber n) = Build.word8 n
-
-buildNetworkNumber :: NetworkNumber -> Build.Builder
-buildNetworkNumber (NetworkNumber n) = Build.word8 n
-
-buildDeviceNumber :: DeviceNumber -> Build.Builder
-buildDeviceNumber (DeviceNumber n) = Build.word16LE n
-
+--------------------------------------------------------------------------------
 antEncodeMessage :: AntMessage -> Build.Builder
 antEncodeMessage =
   \case
-    UnAssignChannel UnAssignChannelPayload{..} ->
-      Build.word8 unassignChannelNumber
-    AssignChannel AssignChannelPayload{..} ->
-      buildChannelNumber assignChannelChannelNumber <>
-      (case assignChannelType of
-         ChannelType t -> Build.word8 t) <>
-      buildNetworkNumber assignChannelNetworkNumber
-    SetChannelId SetChannelIdPayload{..} ->
-      buildChannelNumber setChannelIdChannelNumber <>
-      buildDeviceNumber setChannelIdDeviceNumber <>
-      Build.word8
-        (bool (clearBit setChannelIdDeviceType 0)
-              (setBit setChannelIdDeviceType 0)
-              setChannelIdDevicePairing) <>
-      Build.word8 setChannelIdTransmissionType
-    SetChannelPeriod SetChannelPeriodPayload{..} ->
-      buildChannelNumber setChannelPeriodChannelNumber <>
-      Build.word16LE setChannelPeriodMessagingPeriod
-    SetChannelRFFreq SetChannelRFFreqPayload{..} ->
-      buildChannelNumber setChannelRFFreqChannelNumber <>
-      Build.word8 setChannelRFFreqRFFrequency
-    SetNetworkKey SetNetworkKeyPayload{..} ->
-      buildNetworkNumber setNetworkKeyNetworkNumber <>
-      (case setNetworkKeyNetworkKey of
-         (a,b,c,d,e,f,g,h) -> mconcat (map Build.word8 [a,b,c,d,e,f,g,h]))
     ResetSystem -> Build.word8 0
-    OpenChannel OpenChannelPayload{..} ->
-      buildChannelNumber openChannelChannelNumber
+    UnAssignChannel payload -> infer payload
+    AssignChannel payload -> infer payload
+    SetChannelId payload -> infer payload
+    SetChannelPeriod payload -> infer payload
+    SetChannelRFFreq payload -> infer payload
+    SetNetworkKey payload -> infer payload
+    OpenChannel payload -> infer payload
+    SetTransmitPower payload -> infer payload
+    SetSearchWaveform payload -> infer payload
+    SetChannelTxPower payload -> infer payload
+    SetLowPriorityChannelSearchTimeout payload -> infer payload
+    SetSerialNumChannelId payload -> infer payload
+    SetChannelSearchTimeout payload -> infer payload
+    EnableLED payload -> infer payload
+    CrystalEnable payload -> infer payload
+    ConfigFrequencyAgility payload -> infer payload
+    LibConfig payload -> infer payload
+    StartUpMessage payload -> infer payload
+    SetProximitySearch payload -> infer payload
+    SetChannelSearchPriority payload -> infer payload
+    Set128BitNetworkKey payload -> infer payload
+    CloseChannel payload -> infer payload
+    OpenRxScanMode payload -> infer payload
+    -- BroadcastData payload -> infer payload
+    -- BurstData payload -> infer payload
+    -- AcknowledgedData payload -> infer payload
+    -- AdvancedBurstData payload -> infer payload
+  where infer :: Serial a
+              => a -> Build.Builder
+        infer = Build.lazyByteString . runPutL . serialize
 
+--------------------------------------------------------------------------------
 antMessageId :: AntMessage -> Word8
 antMessageId =
   \case UnAssignChannel{} -> 0x41
@@ -435,14 +608,14 @@ antMessageId =
         SetLowPriorityChannelSearchTimeout{} -> 0x63
         SetSerialNumChannelId{} -> 0x65
         -- RxExtMesgsEnable{} -> 0x66
-        -- EnableLED{} -> 0x68
-        -- CrystalEnable{} -> 0x6D
-        -- LibConfig{} -> 0x6E
-        -- ConfigFrequencyAgility{} -> 0x70
-        -- SetProximitySearch{} -> 0x71
+        EnableLED{} -> 0x68
+        CrystalEnable{} -> 0x6D
+        LibConfig{} -> 0x6E
+        ConfigFrequencyAgility{} -> 0x70
+        SetProximitySearch{} -> 0x71
         -- ConfigEventBuffer{} -> 0x74
-        -- SetChannelSearchPriority{} -> 0x75
-        -- Set128BitNetworkKey{} -> 0x76
+        SetChannelSearchPriority{} -> 0x75
+        Set128BitNetworkKey{} -> 0x76
         -- ConfigHighDutySearch{} -> 0x77
         -- ConfigAdvancedBurst{} -> 0x78
         -- ConfigEventFilter{} -> 0x79
@@ -455,11 +628,23 @@ antMessageId =
         -- SetSearchSharingCycles{} -> 0x81
         -- CryptoKeyNVMOp{} -> 0x83
         -- SetUSBDescriptorString{} -> 0xC7
-        -- StartUpMessage{} -> 0x6F
+        StartUpMessage{} -> 0x6F
         -- SerialErrorMessage{} -> 0xAE
         ResetSystem{} -> 0x4A
         OpenChannel{} -> 0x4B
+        CloseChannel{} -> 0x4C
+        OpenRxScanMode{} -> 0x5B
+        BroadcastData{} -> 0x4E
+        AcknowledgedData{} -> 0x4F
+        BurstData{} -> 0x50
+        AdvancedBurstData{} -> 0x72
+        ChannelResponse{} -> 0x40
+        ChannelStatus{} -> 0x52
+        ChannelId{} -> 0x51
+        ANTVersion{} -> 0x3E
+        Capabilities{} -> 0x54
 
+--------------------------------------------------------------------------------
 encodeSerialMessage
   :: SerialMessage -> Build.Builder
 encodeSerialMessage (SerialMessage (Sync syncByte) message) =
