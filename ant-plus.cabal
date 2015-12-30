@@ -20,13 +20,13 @@ library
   -- exposed-modules:
   -- other-modules:
   exposed-modules: ANTPlus, ANTPlus.Network, ANTPlus.DeviceProfile.HeartRateMonitor
-  build-depends:       base >=4.8 && <4.9, tagged, usb, bytestring, vector, digest, text, bytes, async, stm
+  build-depends:       base >=4.8 && <4.9, tagged, usb, bytestring, vector, digest, text, bytes, async, stm, containers
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options: -Wall -threaded
 
 executable ant+-hrm
-  build-depends: base, ant-plus, usb, vector, bytestring, managed
+  build-depends: base, ant-plus, usb, vector, bytestring, managed, stm
   hs-source-dirs: examples
   main-is: HRM.hs
   ghc-options: -Wall -threaded
