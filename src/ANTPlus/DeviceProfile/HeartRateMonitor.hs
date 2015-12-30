@@ -11,22 +11,42 @@ import qualified ANTPlus
 import qualified Data.ByteString as BS
 
 data HeartRateDevice =
-  HeartRateDevice {heartRateDeviceChannel :: Channel}
+  HeartRateDevice {heartRateDeviceChannel :: !Channel}
 
 data HeartRatePage =
-  HeartRatePage {hrmPage :: PageDetails
-                ,hrmHeartBeatEventTime :: Word64
-                ,hrmHeartBeatCount :: Word8
-                ,hrmComputedHeartRate :: Word8}
+  HeartRatePage {hrmPage :: !PageDetails
+                ,hrmHeartBeatEventTime :: !Word64
+                ,hrmHeartBeatCount :: !Word8
+                ,hrmComputedHeartRate :: !Word8}
   deriving (Show)
 
 data PageDetails
   = PageZero
-  | PageOne Word64
-  | PageTwo Word8 Word16
-  | PageThree Word8 Word8 Word8
-  | PageFour Word8 Word16
+  | PageOperatingTime !OperatingTime
+  | PageIdentification !Identification
+  | PageVersion !Version
+  | PagePreviousHeartBeatTime !PreviousHeartBeatTime
   | PageUnknown
+  deriving (Show)
+
+data OperatingTime =
+  OperatingTime {operatingTime :: !Word64}
+  deriving (Show)
+
+data Identification =
+  Identification {identificationManufacturer :: !Word8
+                 ,identificationSerialNumber :: !Word16}
+  deriving (Show)
+
+data Version =
+  Version {versionHardware :: !Word8
+          ,versionSoftware :: !Word8
+          ,versionModel :: !Word8}
+  deriving (Show)
+
+data PreviousHeartBeatTime =
+  PreviousHeartBeatTime {previousHeartBeatManufacturerSSpecific :: !Word8
+                        ,previousHeartBeatTime :: !Word16}
   deriving (Show)
 
 withHeartRateDevice
@@ -64,12 +84,21 @@ awaitHeartRatePage (HeartRateDevice Channel{..}) =
                        (case pageNumber .&. complement PAGE_TOGGLE of
                           0 -> PageZero
                           1 ->
-                            PageOne (fromIntegral a .|.
-                                     shiftL (fromIntegral b) 8 .|.
-                                     shiftL (fromIntegral c) 16)
-                          2 -> PageTwo a (fromIntegral b .|. shiftL (fromIntegral c) 8)
-                          3 -> PageThree a b c
-                          4 -> PageFour a (fromIntegral b .|. shiftL (fromIntegral c) 8)
+                            PageOperatingTime
+                              (OperatingTime
+                                 (fromIntegral a .|. shiftL (fromIntegral b) 8 .|.
+                                  shiftL (fromIntegral c) 16))
+                          2 ->
+                            PageIdentification
+                              (Identification
+                                 a
+                                 (fromIntegral b .|. shiftL (fromIntegral c) 8))
+                          3 -> PageVersion (Version a b c)
+                          4 ->
+                            PagePreviousHeartBeatTime
+                              (PreviousHeartBeatTime
+                                 a
+                                 (fromIntegral b .|. shiftL (fromIntegral c) 8))
                           _ -> PageUnknown)
                        (fromIntegral eventTimeLsb .|.
                         shiftL (fromIntegral eventTimeMsb) 8)
