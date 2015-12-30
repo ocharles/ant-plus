@@ -2,6 +2,8 @@
 
 module Main where
 
+import Control.Applicative
+import ANTPlus.DeviceProfile.BicyclePower
 import ANTPlus.DeviceProfile.HeartRateMonitor
 import ANTPlus.Network
 import Control.Monad
@@ -18,8 +20,14 @@ main =
               liftIO (putStrLn "Opened ANT+")
               network <- managed (withNetwork ant)
               liftIO (putStrLn "Opened network")
-              managed (withHeartRateMonitor network))
-          (\hrm ->
-             do awaitPage <- newHeartRatePageReader hrm
-                forever (do page <- atomically awaitPage
-                            putStrLn ("Heart rate: " <> show page)))
+              hrm <- managed (withHeartRateMonitor network)
+              pwr <- managed (withBicyclePower network)
+              pure (hrm,pwr))
+          (\(hrm,pwr) ->
+             do awaitHrmPage <- newHeartRatePageReader hrm
+                awaitPwrPage <- newBicyclePowerPageReader pwr
+                forever (do page <-
+                              atomically
+                                (fmap Left awaitHrmPage <|>
+                                 fmap Right awaitPwrPage)
+                            print page))

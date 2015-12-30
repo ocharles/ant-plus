@@ -167,8 +167,8 @@ instance Serial SetChannelIdPayload where
   serialize SetChannelIdPayload{..} =
     do serialize setChannelIdChannelNumber
        serialize setChannelIdDeviceNumber
-       putWord8 (bool (clearBit setChannelIdDeviceType 0)
-                      (setBit setChannelIdDeviceType 0)
+       putWord8 (bool (clearBit setChannelIdDeviceType 7)
+                      (setBit setChannelIdDeviceType 7)
                       setChannelIdDevicePairing)
        putWord8 setChannelIdTransmissionType
   deserialize =
@@ -178,7 +178,7 @@ instance Serial SetChannelIdPayload where
        tt <- deserialize
        pure (SetChannelIdPayload cn
                                  dn
-                                 (testBit dt 0)
+                                 (testBit dt 7)
                                  dt
                                  tt)
 
@@ -290,8 +290,8 @@ data SetSerialNumChannelIdPayload =
 instance Serial SetSerialNumChannelIdPayload where
   serialize SetSerialNumChannelIdPayload{..} =
     do serialize setSerialNumChannelIdChannelNumber
-       putWord8 (bool (clearBit setSerialNumChannelIdDeviceTypeId 0)
-                      (setBit setSerialNumChannelIdDeviceTypeId 0)
+       putWord8 (bool (clearBit setSerialNumChannelIdDeviceTypeId 7)
+                      (setBit setSerialNumChannelIdDeviceTypeId 7)
                       setSerialNumChannelIdPairingRequest)
        putWord8 setSerialNumChannelIdTransmissionType
   deserialize =
@@ -299,7 +299,7 @@ instance Serial SetSerialNumChannelIdPayload where
        dt <- deserialize
        tt <- deserialize
        pure (SetSerialNumChannelIdPayload cn
-                                          (testBit dt 0)
+                                          (testBit dt 7)
                                           dt
                                           tt)
 
