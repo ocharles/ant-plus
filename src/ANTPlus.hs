@@ -454,19 +454,19 @@ data BroadcastDataPayload =
 
 --------------------------------------------------------------------------------
 data AcknowledgedDataPayload =
-  AcknowledgedDataPayload {acknowledgedDataChannelNumber :: !ChannelNumber}
-                          -- ,acknowledgedDataData :: a}
+  AcknowledgedDataPayload {acknowledgedDataChannelNumber :: !ChannelNumber
+                          ,acknowledgedDataData :: !BS.ByteString}
   deriving (Show)
 
 --------------------------------------------------------------------------------
 newtype SequenceNumber = SequenceNumber Word8
-  deriving (Show)
+  deriving (Show, Generic, Serial)
 
 --------------------------------------------------------------------------------
 data BurstDataPayload =
   BurstDataPayload {burstDataSequenceNumber :: !SequenceNumber
-                   ,burstDataChannelNumber :: !ChannelNumber}
-                   -- ,burstDataData :: a}
+                   ,burstDataChannelNumber :: !ChannelNumber
+                   ,burstDataData :: !BS.ByteString}
   deriving (Show)
 
 --------------------------------------------------------------------------------
@@ -603,9 +603,19 @@ antEncodeMessage =
     Set128BitNetworkKey payload -> infer payload
     CloseChannel payload -> infer payload
     OpenRxScanMode payload -> infer payload
-    -- BroadcastData payload -> infer payload
-    -- BurstData payload -> infer payload
-    -- AcknowledgedData payload -> infer payload
+    BroadcastData BroadcastDataPayload{..} ->
+      Build.lazyByteString
+        (runPutL (do serialize broadcastDataChannelNumber
+                     putByteString broadcastDataData))
+    BurstData BurstDataPayload{..} ->
+      Build.lazyByteString
+        (runPutL (do serialize burstDataSequenceNumber
+                     serialize burstDataChannelNumber
+                     putByteString burstDataData))
+    AcknowledgedData AcknowledgedDataPayload{..} ->
+      Build.lazyByteString
+        (runPutL (do serialize acknowledgedDataChannelNumber
+                     putByteString acknowledgedDataData))
     -- AdvancedBurstData payload -> infer payload
     DeviceSerialNumber payload -> infer payload
   where infer :: Serial a
@@ -693,11 +703,16 @@ decodeSerialMessage =
                 case messageId of
                   78 ->
                     BroadcastData <$>
-                    (BroadcastDataPayload <$> deserialize <*>
-                     getBytes 8)
+                    (BroadcastDataPayload <$> deserialize <*> getBytes 8)
+                  79 ->
+                    AcknowledgedData <$>
+                    (AcknowledgedDataPayload <$> deserialize <*> getBytes 8)
+                  80 ->
+                    BurstData <$>
+                    (BurstDataPayload <$> deserialize <*> deserialize <*> getBytes 8)
                   64 -> ChannelResponse <$> deserialize
-                  _ ->
-                    fail ("Unknown message id " ++ show messageId)
+                  111 -> StartUpMessage <$> deserialize
+                  _ -> fail ("Unknown message id " ++ show messageId)
               checksum <- getWord8
               isEmpty >>= guard
               return (SerialMessage syncByte payload))

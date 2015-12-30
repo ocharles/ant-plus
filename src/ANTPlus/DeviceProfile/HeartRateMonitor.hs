@@ -85,6 +85,12 @@ withHeartRateMonitor network m =
             ANTPlus.BroadcastData ANTPlus.BroadcastDataPayload{..}
               | broadcastDataChannelNumber == channelNumber ->
                 Just broadcastDataData
+            ANTPlus.AcknowledgedData ANTPlus.AcknowledgedDataPayload{..}
+              | acknowledgedDataChannelNumber == channelNumber ->
+                Just acknowledgedDataData
+            ANTPlus.BurstData ANTPlus.BurstDataPayload{..}
+              | burstDataChannelNumber == channelNumber ->
+                Just burstDataData
             _ -> Nothing
 
 pattern PAGE_TOGGLE = 0x80
