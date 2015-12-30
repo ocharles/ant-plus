@@ -8,23 +8,22 @@ import Control.Monad
 import Control.Monad.Managed
 import Data.Foldable (for_)
 import Data.Monoid ((<>))
-import System.USB
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Builder as Build
-import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Vector as V
 
 main :: IO ()
 main =
   do antStick <- fmap V.head findANTUSBDevices
-     with (do ant <-
+     with (do liftIO (putStrLn "Opening ANT+")
+              ant <-
                 managed (withANTUSBDevice antStick)
+              liftIO (putStrLn "Opened ANT+")
               network <-
                 managed (withNetwork ant)
+              liftIO (putStrLn "Opened network")
               managed (withHeartRateDevice network))
           (\hrm ->
              forever (do msg <- awaitHeartRatePage hrm
                          for_ msg
-                              (\HeartRatePage{..} ->
+                              (\page ->
                                  putStrLn ("Heart rate: " <>
-                                           show hrmComputedHeartRate))))
+                                           show page))))

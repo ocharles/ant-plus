@@ -5,7 +5,7 @@ let
   inherit (nixpkgs) pkgs;
 
   f = { mkDerivation, base, bytes, bytestring, digest, stdenv
-      , tagged, text, usb, vector, managed
+      , tagged, text, usb, vector, managed, async, stm
       }:
       mkDerivation {
         pname = "ant-plus";
@@ -14,7 +14,7 @@ let
         isLibrary = true;
         isExecutable = true;
         libraryHaskellDepends = [
-          base bytes bytestring digest tagged text usb vector
+          base bytes bytestring digest tagged text usb vector async stm
         ];
         executableHaskellDepends = [ base bytestring usb vector managed ];
         homepage = "https://github.com/ocharles/ant-plus";
